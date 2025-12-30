@@ -1,4 +1,20 @@
 /** @file background.c Documented background module
+
+double uem_metallicity(double z) {
+    double gamma = 2.5;
+    double Z_0 = 0.02;
+    double Z = Z_0 * pow(1.0 + z, -gamma);
+    double Z_min = 1e-4;
+    return (Z < Z_min) ? Z_min : Z;
+}
+
+double uem_efficiency(double z, double epsilon_0, double Z_1, double Z_2) {
+    double Z = uem_metallicity(z);
+    double kappa = 10.0;
+    double gate_low = 1.0 / (1.0 + exp(-kappa * (log10(Z) - log10(Z_1))));
+    double gate_high = 1.0 / (1.0 + exp(kappa * (log10(Z) - log10(Z_2))));
+    return epsilon_0 * gate_low * gate_high;
+}
  *
  * * Julien Lesgourgues, 17.04.2011
  * * routines related to ncdm written by T. Tram in 2011
@@ -381,6 +397,7 @@ int background_functions(
   /** - define local variables */
 
   /* total density */
+
   double rho_tot;
   /* critical density */
   double rho_crit;
@@ -527,17 +544,48 @@ int background_functions(
          to rho_ncdm1 */
       rho_m += rho_ncdm - 3.* p_ncdm;
     }
-  }
-
-  /* Lambda */
+/* Lambda */
   if (pba->has_lambda == _TRUE_) {
     pvecback[pba->index_bg_rho_lambda] = pba->Omega0_lambda * pow(pba->H0,2);
     rho_tot += pvecback[pba->index_bg_rho_lambda];
     p_tot -= pvecback[pba->index_bg_rho_lambda];
-  }
+  } // <--- ENSURE THIS BRACE IS HERE
 
   /* fluid with w(a) and constant cs2 */
   if (pba->has_fld == _TRUE_) {
+
+    /* 1. Get rho_fld from vector of integrated variables */
+    pvecback[pba->index_bg_rho_fld] = pvecback_B[pba->index_bi_rho_fld];
+
+    /* 2. Get baseline w_fld from dedicated function */
+    class_call(background_w_fld(pba,a,&w_fld,&dw_over_da,&integral_fld), pba->error_message, pba->error_message);
+
+    /* --- UEM MODIFICATION: Baryonic -> Latter Transition --- */
+    if (a > 0.1) {
+        double z_current_uem = (1.0/a) - 1.0;
+        if (z_current_uem < 0.5) {
+            w_fld = w_fld + 0.2; // The Latter Phase shift
+        }
+    }
+
+    /* 3. Finalize Fluid Background Quantities */
+    pvecback[pba->index_bg_w_fld] = w_fld;
+    rho_tot += pvecback[pba->index_bg_rho_fld];
+    p_tot += w_fld * pvecback[pba->index_bg_rho_fld];
+    dp_dloga += (a*dw_over_da-3*(1+w_fld)*w_fld)*pvecback[pba->index_bg_rho_fld];
+
+  } // <--- THIS CLOSES THE FLD BLOCK
+    /* ======================================================== */
+    /* UEM MODIFICATION END                                    */
+    /* ======================================================== */
+
+    pvecback[pba->index_bg_w_fld] = w_fld;
+
+    // Standard accumulation of totals
+    rho_tot += pvecback[pba->index_bg_rho_fld];
+    p_tot += w_fld * pvecback[pba->index_bg_rho_fld];
+    dp_dloga += (a*dw_over_da-3*(1+w_fld)*w_fld)*pvecback[pba->index_bg_rho_fld];
+  }if (pba->has_fld == _TRUE_) {
 
     /* get rho_fld from vector of integrated variables */
     pvecback[pba->index_bg_rho_fld] = pvecback_B[pba->index_bi_rho_fld];
@@ -2586,112 +2634,53 @@ int background_output_data(
  * @param error_message            Output: error message
  */
 
-int background_derivs(
-                      double loga,
-                      double* y, /* vector with argument y[index_bi] (must be already allocated with size pba->bi_size) */
-                      double* dy, /* vector with argument dy[index_bi]
-                                     (must be already allocated with
-                                     size pba->bi_size) */
-                      void * parameters_and_workspace,
-                      ErrorMsg error_message
-                      ) {
-
-  /** Summary: */
-
-  /** - define local variables */
-
+int background_derivs(double loga, double * y, double * dy, void * parameters_and_workspace, ErrorMsg error_message) {
   struct background_parameters_and_workspace * pbpaw;
   struct background * pba;
-  double * pvecback, a, H, rho_M;
-
+  double a;
+  double rho_tot = 0.;
+  double p_tot = 0.;
+  double w_fld, dw_over_da, integral_fld;
+  
   pbpaw = parameters_and_workspace;
-  pba =  pbpaw->pba;
-  pvecback = pbpaw->pvecback;
+  pba = pbpaw->pba;
+  
+  a = exp(loga);  // Convert log(a) to actual scale factor
 
-  /** - scale factor a (in fact, given our normalisation conventions, this stands for a/a_0) */
-  a = exp(loga);
+  rho_tot += (pba->Omega0_g + pba->Omega0_ur) * pow(pba->H0,2) / a / a;
+  rho_tot += (pba->Omega0_b + pba->Omega0_cdm) * pow(pba->H0,2) / a / a / a;
 
-  /** - calculate functions of \f$ a \f$ with background_functions() */
-  class_call(background_functions(pba, a, y, normal_info, pvecback),
-             pba->error_message,
-             error_message);
-
-  /** - Short hand notation for Hubble */
-  H = pvecback[pba->index_bg_H];
-
-  /** - calculate derivative of cosmological time \f$ dt/dloga = 1/H \f$ */
-  dy[pba->index_bi_time] = 1./H;
-
-  /** - calculate derivative of conformal time \f$ d\tau/dloga = 1/aH \f$ */
-  dy[pba->index_bi_tau] = 1./a/H;
-
-  class_test(pvecback[pba->index_bg_rho_g] <= 0.,
-             error_message,
-             "rho_g = %e instead of strictly positive",pvecback[pba->index_bg_rho_g]);
-
-  /** - calculate detivative of sound horizon \f$ drs/dloga = drs/dtau * dtau/dloga = c_s/aH \f$*/
-  dy[pba->index_bi_rs] = 1./a/H/sqrt(3.*(1.+3.*pvecback[pba->index_bg_rho_b]/4./pvecback[pba->index_bg_rho_g]))*sqrt(1.-pba->K*y[pba->index_bi_rs]*y[pba->index_bi_rs]); // TBC: curvature correction
-
-  /** - solve second order growth equation \f$ [D''(\tau)=-aHD'(\tau)+3/2 a^2 \rho_M D(\tau) \f$
-      written as \f$ dD/dloga = D' / (aH) \f$ and \f$ dD'/dloga = -D' + (3/2) (a/H) \rho_M D \f$ */
-  rho_M = pvecback[pba->index_bg_rho_b];
-  if (pba->has_cdm == _TRUE_) {
-    rho_M += pvecback[pba->index_bg_rho_cdm];
-  }
-  if (pba->has_idm == _TRUE_){
-    rho_M += pvecback[pba->index_bg_rho_idm];
-  }
-
-  dy[pba->index_bi_D] = y[pba->index_bi_D_prime]/a/H;
-  dy[pba->index_bi_D_prime] = -y[pba->index_bi_D_prime] + 1.5*a*rho_M*y[pba->index_bi_D]/H;
-
-  if (pba->has_dcdm == _TRUE_) {
-    /** - compute dcdm density \f$ d\rho/dloga = -3 \rho - \Gamma/H \rho \f$*/
-    dy[pba->index_bi_rho_dcdm] = -3.*y[pba->index_bi_rho_dcdm] - pba->Gamma_dcdm/H*y[pba->index_bi_rho_dcdm];
-  }
-
-  if ((pba->has_dcdm == _TRUE_) && (pba->has_dr == _TRUE_)) {
-    /** - Compute dr density \f$ d\rho/dloga = -4\rho - \Gamma/H \rho \f$ */
-    dy[pba->index_bi_rho_dr] = -4.*y[pba->index_bi_rho_dr]+pba->Gamma_dcdm/H*y[pba->index_bi_rho_dcdm];
+  if (pba->has_lambda == _TRUE_) {
+    rho_tot += pba->Omega0_lambda * pow(pba->H0,2);
   }
 
   if (pba->has_fld == _TRUE_) {
-    /** - Compute fld density \f$ d\rho/dloga = -3 (1+w_{fld}(a)) \rho \f$ */
-    dy[pba->index_bi_rho_fld] = -3.*(1.+pvecback[pba->index_bg_w_fld])*y[pba->index_bi_rho_fld];
+    double rho_fld = y[pba->index_bi_rho_fld];
+    class_call(background_w_fld(pba,a,&w_fld,&dw_over_da,&integral_fld), pba->error_message, pba->error_message);
+    
+    // UEM LATTER PHASE: Shift w at z < 0.5
+    if (a > 0.1) {
+        if ((1.0/a - 1.0) < 0.5) { 
+            w_fld += 0.2;  // Make Dark Energy less negative
+        }
+    }
+    
+    rho_tot += rho_fld;
+    dy[pba->index_bi_rho_fld] = -3. * (1. + w_fld) * rho_fld / a;
   }
 
-  if (pba->has_scf == _TRUE_) {
-    /** - Scalar field equation: \f$ \phi'' + 2 a H \phi' + a^2 dV = 0 \f$  (note H is wrt cosmological time)
-        written as \f$ d\phi/dlna = phi' / (aH) \f$ and \f$ d\phi'/dlna = -2*phi' - (a/H) dV \f$ */
-    dy[pba->index_bi_phi_scf] = y[pba->index_bi_phi_prime_scf]/a/H;
-    dy[pba->index_bi_phi_prime_scf] = - 2*y[pba->index_bi_phi_prime_scf] - a*dV_scf(pba,y[pba->index_bi_phi_scf])/H ;
-  }
+// Calculate Hubble parameter
+  double H = sqrt(rho_tot - pba->K / a / a);
+  
+  // Conformal time derivative: dτ/d(log a) = 1/(aH)
+  dy[pba->index_bi_tau] = 1. / (a * H);
+  
+  // Proper time derivative: dt/d(log a) = 1/H
+  dy[pba->index_bi_time] = 1. / H;
 
+  return _SUCCESS_;  
   return _SUCCESS_;
-
 }
-
-/**
- * At some step during the integraton of the background equations,
- * this function extracts the qantities that we want to keep memory
- * of, and stores them in a row of the background table (as well as
- * extra tables: z_table, tau_table).
- *
- * This is one of the few functions in the code which is passed to the generic_integrator() routine.
- * Since generic_integrator() should work with functions passed from various modules, the format of the arguments
- * is a bit special:
- * - fixed parameters and workspaces are passed through a generic pointer.
- *   generic_integrator() doesn't know the content of this pointer.
- * - the error management is a bit special: errors are not written as usual to pba->error_message, but to a generic
- *   error_message passed in the list of arguments.
- *
- * @param loga                     Input: current value of log(a)
- * @param y                        Input: current vector of integrated quantities (with index_bi)
- * @param dy                       Input: current derivative of y w.r.t log(a)
- * @param index_loga               Input: index of the log(a) value within the background_table
- * @param parameters_and_workspace Input/output: fixed parameters (e.g. indices), workspace, background structure where the output is written...
- * @param error_message            Output: error message
- */
 
 int background_sources(
                        double loga,

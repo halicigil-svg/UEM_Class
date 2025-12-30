@@ -65,12 +65,23 @@ struct background
 
   double Omega0_ur; /**< \f$ \Omega_{0 \nu r} \f$: ultra-relativistic neutrinos */
 
-  double Omega0_cdm;      /**< \f$ \Omega_{0 cdm} \f$: cold dark matter */
+  
+      double Omega0_cdm;
+      double varconst_transition_redshift; /* Injected to fix compilation error */
+          /**< \f$ \Omega_{0 cdm} \f$: cold dark matter */
+  double Omega_former_0;
+  double H0_former;
+  double t_trans;
+  double width;
+  double Z_1;
+
 
   double Omega0_idm; /**< \f$ \Omega_{0 idm} \f$: interacting dark matter with photons, baryons, and idr */
 
 
   double Omega0_idr; /**< \f$ \Omega_{0 idr} \f$: interacting dark radiation */
+
+  /* UEM Parameters */
   double T_idr;      /**< \f$ T_{idr} \f$: current temperature of interacting dark radiation in Kelvins */
 
   double Omega0_dcdmdr;   /**< \f$ \Omega_{0 dcdm}+\Omega_{0 dr} \f$: decaying cold dark matter (dcdm) decaying to dark radiation (dr) */
@@ -121,8 +132,31 @@ struct background
   double varconst_alpha; /**< finestructure constant for varying fundamental constants */
   double varconst_me; /**< electron mass for varying fundamental constants */
   enum varconst_dependence varconst_dep; /**< dependence of the varying fundamental constants as a function of time */
-  double varconst_transition_redshift; /**< redshift of transition between varied fundamental constants and normal fundamental constants in the 'varconst_instant' case*/
+/**
+   * @name - UEM-specific parameters
+   */
+  //@{
+  
 
+  double Omega_latter_0;  /**< Latter-phase density parameter today (computed) */
+  double epsilon_0;       /**< Quantosynthesis efficiency normalization */
+  double Z_2;             /**< High-metallicity threshold (linear, solar units) */
+  double w_former;        /**< Former-phase equation of state parameter */
+  int uem_active;         /**< Flag: is UEM physics enabled? */
+  
+  //@}
+  
+  /**
+   * @name - UEM background indices
+   */
+  //@{
+  
+  int index_bg_rho_former;   /**< Former-phase energy density */
+  int index_bg_rho_latter;   /**< Latter-phase energy density */  
+  int index_bg_qs_rate;      /**< Quantosynthesis rate */
+  int index_bg_p_former;     /**< Former-phase pressure */
+  
+  //@}
   //@}
 
 
